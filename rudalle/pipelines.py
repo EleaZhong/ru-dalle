@@ -13,10 +13,151 @@ import torch.nn.functional as F
 from tqdm.auto import tqdm
 from PIL import Image
 from einops import rearrange
-
+ 
 from . import utils
 
+print("new")
+def generate_images_arb(text, tokenizer, dalle, vae, top_k, top_p, images_num, image_prompts=None, temperature=1.0, bs=8,
+                    seed=None, use_cache=True, true_size=1024, cfg=0):
+    # TODO docstring
+    if seed is not None:
+        utils.seed_everything(seed)
 
+    vocab_size = dalle.get_param('vocab_size')
+    text_seq_length = dalle.get_param('text_seq_length')
+    image_seq_length = dalle.get_param('image_seq_length')
+    total_seq_length = dalle.get_param('total_seq_length')
+    device = dalle.get_param('device')
+
+    print(vocab_size, text_seq_length, image_seq_length, total_seq_length, device, "i")
+    # breakpoint()
+    
+
+    text = text.lower().strip()
+    input_ids = tokenizer.encode_text(text, text_seq_length=text_seq_length)
+    pil_images, ppl_scores = [], []
+    print(text, input_ids)
+    input_ids_nocond = torch.zeros_like(input_ids)
+    print(images_num)
+    for chunk in more_itertools.chunked(range(images_num), bs):
+        chunk_bs = len(chunk)
+        print(chunk_bs, chunk)
+        
+        with torch.no_grad():
+            attention_mask = torch.ones((chunk_bs, 1, total_seq_length, total_seq_length), device=device)
+            # attention_mask = torch.tril(torch.ones((chunk_bs, 1, total_seq_length, total_seq_length), device=device))
+            textprompts = input_ids.unsqueeze(0).repeat(chunk_bs, 1).to(device)
+            textprompts_nocond = input_ids_nocond.unsqueeze(0).repeat(chunk_bs, 1).to(device)
+            out = None
+
+            cache = None
+            if image_prompts is not None:
+                prompts_idx, prompts = image_prompts.image_prompts_idx, image_prompts.image_prompts
+                prompts = prompts.repeat(chunk_bs, 1)
+            
+            # import pdb; pdb.set_trace()
+            true_side_len = np.sqrt(true_size).astype(int)
+            
+            assert true_side_len*true_side_len == true_size, "true size should be a integer square"
+            assert true_side_len>=32, "side length should be larger than rudalle's default"
+            
+            cookie = torch.arange(0,true_size).reshape(true_side_len,true_side_len)
+
+            
+            for idx in tqdm(range(0, true_size)):
+                # cookie cutting
+                wpos = idx%true_side_len + 1
+                hpos = idx//true_side_len + 1
+                # print(wpos, hpos)
+                sidelen = 32
+                halfside = sidelen//2
+                if wpos<=halfside:
+                    t = cookie.narrow(1, 0, sidelen)
+                elif wpos+halfside>true_side_len:
+                    t = cookie.narrow(1, true_side_len-sidelen, sidelen)
+                else:
+                    t = cookie.narrow(1, wpos-halfside, sidelen)
+
+                if hpos<=halfside:
+                    t = t.narrow(0, 0, sidelen)
+                elif hpos+halfside>true_side_len:
+                    t = t.narrow(0, true_side_len-sidelen, sidelen)
+                else:
+                    t = t.narrow(0, hpos-halfside, sidelen)
+                t = t[t<idx]
+                # print(t)
+                if out is not None:
+                    curout = out[:,t.reshape((-1,))]
+                    # print(curout)
+                else:
+                    curout = None
+                
+                if image_prompts is not None and idx in prompts_idx:
+                    if out is not None:
+                        out = torch.cat((out, prompts[:, idx].unsqueeze(1)), dim=-1)
+                    else:
+                        out = prompts[:, idx].unsqueeze(1)
+                else:
+                    if out is not None:
+                        combd = torch.cat((textprompts, curout), dim=-1)
+                    else:
+                        combd = textprompts
+                    logits, cache = dalle(combd, attention_mask, use_cache=use_cache,
+                                          cache=cache, return_loss=False)
+                    logits = logits[:, -1, vocab_size:]
+                    
+                    if cfg is not None:
+                        if out is not None:
+                            combd_nocond = torch.cat((textprompts_nocond, curout), dim=-1)
+                        else:
+                            combd_nocond = textprompts_nocond
+                        logits_nocond, cache = dalle(combd_nocond, attention_mask, use_cache=use_cache,
+                                              cache=cache, return_loss=False)
+                        logits_nocond = logits_nocond[:, -1, vocab_size:]
+
+                        logits = torch.lerp(logits_nocond, logits, cfg)
+                    
+                    logits /= temperature
+                    filtered_logits = transformers.top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
+                    probs = torch.nn.functional.softmax(filtered_logits, dim=-1)
+                    sample = torch.multinomial(probs, 1)
+                    if out is not None:
+                        out = torch.cat((out, sample), dim=-1)
+                    else:
+                        out = sample
+                # print("out",out)
+            # out = torch.cat((textprompts, out), dim=-1)
+            # import pdb; pdb.set_trace()
+            # image_seq_length = true_size
+            # codebooks = out[:, -image_seq_length:]
+            codebooks = out
+            # logits, _ = dalle(out, attention_mask, cache=cache, use_cache=use_cache, return_loss=False)
+            # logits = rearrange(logits, 'b n c -> b c n')
+            # image_logits = logits[:, vocab_size:, -image_seq_length:- 1].contiguous().float()
+            # out = out.contiguous().long()
+            # ppl_scores.append(
+            #     ce_to_ppl(F.cross_entropy(
+            #         image_logits,
+            #         out[:, -image_seq_length + 1:],
+            #         reduction='none',
+            #     ))
+            # )
+
+            images = vae.decode(codebooks)
+            pil_images += utils.torch_tensors_to_pil_list(images)
+
+    # ppl_scores = torch.cat(ppl_scores)
+    # indexes = ppl_scores.argsort()
+
+    # sorted_pil_images = []
+    # for idx in indexes:
+    #     sorted_pil_images.append(pil_images[idx.item()])
+
+    return pil_images, None
+
+
+
+print("new")
 def generate_images(text, tokenizer, dalle, vae, top_k, top_p, images_num, image_prompts=None, temperature=1.0, bs=8,
                     seed=None, use_cache=True):
     # TODO docstring
@@ -29,32 +170,56 @@ def generate_images(text, tokenizer, dalle, vae, top_k, top_p, images_num, image
     total_seq_length = dalle.get_param('total_seq_length')
     device = dalle.get_param('device')
 
+    print(vocab_size, text_seq_length, image_seq_length, total_seq_length, device, "i")
+    # breakpoint()
+    
+
     text = text.lower().strip()
     input_ids = tokenizer.encode_text(text, text_seq_length=text_seq_length)
     pil_images, ppl_scores = [], []
+    print(text, input_ids)
+    print(images_num)
     for chunk in more_itertools.chunked(range(images_num), bs):
         chunk_bs = len(chunk)
+        print(chunk_bs, chunk)
+        
         with torch.no_grad():
             attention_mask = torch.tril(torch.ones((chunk_bs, 1, total_seq_length, total_seq_length), device=device))
-            out = input_ids.unsqueeze(0).repeat(chunk_bs, 1).to(device)
+            textprompts = input_ids.unsqueeze(0).repeat(chunk_bs, 1).to(device)
+            out = None
 
             cache = None
             if image_prompts is not None:
                 prompts_idx, prompts = image_prompts.image_prompts_idx, image_prompts.image_prompts
                 prompts = prompts.repeat(chunk_bs, 1)
-            for idx in tqdm(range(out.shape[1], total_seq_length)):
-                idx -= text_seq_length
+            
+            # import pdb; pdb.set_trace()
+            # cookie = 
+            assert False
+            
+            for idx in tqdm(0, total_seq_length-text_seq_length):
                 if image_prompts is not None and idx in prompts_idx:
-                    out = torch.cat((out, prompts[:, idx].unsqueeze(1)), dim=-1)
+                    if out is not None:
+                        out = torch.cat((out, prompts[:, idx].unsqueeze(1)), dim=-1)
+                    else:
+                        out = prompts[:, idx].unsqueeze(1)
                 else:
-                    logits, cache = dalle(out, attention_mask, use_cache=use_cache,
+                    if out is not None:
+                        combd = torch.cat((textprompts, out), dim=-1)
+                    else:
+                        combd = textprompts
+                    logits, cache = dalle(combd, attention_mask, use_cache=use_cache,
                                           cache=cache, return_loss=False)
                     logits = logits[:, -1, vocab_size:]
                     logits /= temperature
                     filtered_logits = transformers.top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
                     probs = torch.nn.functional.softmax(filtered_logits, dim=-1)
                     sample = torch.multinomial(probs, 1)
-                    out = torch.cat((out, sample), dim=-1)
+                    if out is not None:
+                        out = torch.cat((out, sample), dim=-1)
+                    else:
+                        out = sample
+            out = torch.cat((textprompts, out), dim=-1)
 
             codebooks = out[:, -image_seq_length:]
             logits, _ = dalle(out, attention_mask, cache=cache, use_cache=use_cache, return_loss=False)
