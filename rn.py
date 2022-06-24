@@ -47,7 +47,7 @@ def simple_detect_lang(text):
     return 'other'
 #@markdown do not use the English text for inference, you should use translation to Russian, or you can use directly Russian text 
 
-text = 'a full moon at sea, oil on canvas' # @param 
+text = 'a path up the floral mountain valley, oil on canvas' # @param 
 
 #@markdown *радуга на фоне ночного города / rainbow on the background of the city at night*
 
@@ -60,11 +60,17 @@ seed_everything(random.randint(0,9999))
 
 pil_images = []
 ppl_scores = []
-for top_k, top_p, images_num, cfg in [
-    (2048, 0.995, 1, 4),
+# try:
+for text, top_k, top_p, images_num, cfg in [
+    ("a forest in the mountains at day, oil on canvas",2048, 0.995, 3, 4),
 ]:
-    _pil_images, _ = generate_images_arb(text, tokenizer, dalle, vae, top_k=top_k, images_num=images_num, top_p=top_p, bs=8, use_cache=False,true_size=80*80, cfg=cfg)
+    text = translators.google(text, from_language='en', to_language='ru')
+    _pil_images, _ = generate_images_arb(text, tokenizer, dalle, vae, top_k=top_k, images_num=images_num, top_p=top_p, bs=8, use_cache=False,true_size=32*32, cfg=cfg)
     pil_images += _pil_images
-    # ppl_scores += _ppl_scores
+        # ppl_scores += _ppl_scores
+# except:
+#     print("skipped")
+
+
 for n,p in enumerate(pil_images):
     p.save(f"{n}.png")

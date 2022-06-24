@@ -44,8 +44,8 @@ def generate_images_arb(text, tokenizer, dalle, vae, top_k, top_p, images_num, i
         print(chunk_bs, chunk)
         
         with torch.no_grad():
-            attention_mask = torch.ones((chunk_bs, 1, total_seq_length, total_seq_length), device=device)
-            # attention_mask = torch.tril(torch.ones((chunk_bs, 1, total_seq_length, total_seq_length), device=device))
+            # attention_mask = torch.ones((chunk_bs, 1, total_seq_length, total_seq_length), device=device)
+            attention_mask = torch.tril(torch.ones((chunk_bs, 1, total_seq_length, total_seq_length), device=device))
             textprompts = input_ids.unsqueeze(0).repeat(chunk_bs, 1).to(device)
             textprompts_nocond = input_ids_nocond.unsqueeze(0).repeat(chunk_bs, 1).to(device)
             out = None
@@ -71,19 +71,19 @@ def generate_images_arb(text, tokenizer, dalle, vae, top_k, top_p, images_num, i
                 # print(wpos, hpos)
                 sidelen = 32
                 halfside = sidelen//2
-                if wpos<=halfside:
-                    t = cookie.narrow(1, 0, sidelen)
-                elif wpos+halfside>true_side_len:
-                    t = cookie.narrow(1, true_side_len-sidelen, sidelen)
-                else:
-                    t = cookie.narrow(1, wpos-halfside, sidelen)
+                wpos_percentage = wpos/true_side_len
+                hpos_percentage = hpos/true_side_len
+                w_internal_pos = wpos_percentage * sidelen
+                h_internal_pos = hpos_percentage * sidelen
+                # wcutter = min(int(wpos-w_internal_pos), true_side_len-sidelen)
+                # hcutter = min(int(hpos-h_internal_pos), true_side_len-sidelen)
+                wcutter = int(wpos-w_internal_pos)
+                hcutter = int(hpos-h_internal_pos)
+                
+                t = cookie.narrow(1, wcutter, sidelen)
+                t = t.narrow(0, hcutter, sidelen)
 
-                if hpos<=halfside:
-                    t = t.narrow(0, 0, sidelen)
-                elif hpos+halfside>true_side_len:
-                    t = t.narrow(0, true_side_len-sidelen, sidelen)
-                else:
-                    t = t.narrow(0, hpos-halfside, sidelen)
+
                 t = t[t<idx]
                 # print(t)
                 if out is not None:
@@ -102,8 +102,12 @@ def generate_images_arb(text, tokenizer, dalle, vae, top_k, top_p, images_num, i
                         combd = torch.cat((textprompts, curout), dim=-1)
                     else:
                         combd = textprompts
-                    logits, cache = dalle(combd, attention_mask, use_cache=use_cache,
-                                          cache=cache, return_loss=False)
+                    # if idx>=2400:
+                    #     print(combd.size(), attention_mask.size())
+                    # try:
+                    logits, cache = dalle(combd, attention_mask, use_cache=use_cache, cache=cache, return_loss=False)
+                    # except:
+                    # import pdb; pdb.set_trace()
                     logits = logits[:, -1, vocab_size:]
                     
                     if cfg is not None:
@@ -125,24 +129,84 @@ def generate_images_arb(text, tokenizer, dalle, vae, top_k, top_p, images_num, i
                         out = torch.cat((out, sample), dim=-1)
                     else:
                         out = sample
-                # print("out",out)
-            # out = torch.cat((textprompts, out), dim=-1)
-            # import pdb; pdb.set_trace()
-            # image_seq_length = true_size
-            # codebooks = out[:, -image_seq_length:]
             codebooks = out
-            # logits, _ = dalle(out, attention_mask, cache=cache, use_cache=use_cache, return_loss=False)
-            # logits = rearrange(logits, 'b n c -> b c n')
-            # image_logits = logits[:, vocab_size:, -image_seq_length:- 1].contiguous().float()
-            # out = out.contiguous().long()
-            # ppl_scores.append(
-            #     ce_to_ppl(F.cross_entropy(
-            #         image_logits,
-            #         out[:, -image_seq_length + 1:],
-            #         reduction='none',
-            #     ))
-            # )
+            images = vae.decode(codebooks)
+            pil_images += utils.torch_tensors_to_pil_list(images)
+            
+            lsop = "Горизонт ночного города, холст, масло"
+            input_ids = tokenizer.encode_text(lsop, text_seq_length=text_seq_length)
+            textprompts = input_ids.unsqueeze(0).repeat(chunk_bs, 1).to(device)
+            
+            for idx in tqdm(range(0, 32*23)):
+#                 # cookie cutting
+#                 wpos = idx%true_side_len + 1
+#                 hpos = idx//true_side_len + 1
+#                 # print(wpos, hpos)
+#                 sidelen = 32
+#                 halfside = sidelen//2
+#                 wpos_percentage = wpos/true_side_len
+#                 hpos_percentage = hpos/true_side_len
+#                 w_internal_pos = wpos_percentage * sidelen
+#                 h_internal_pos = hpos_percentage * sidelen
+#                 # wcutter = min(int(wpos-w_internal_pos), true_side_len-sidelen)
+#                 # hcutter = min(int(hpos-h_internal_pos), true_side_len-sidelen)
+#                 wcutter = int(wpos-w_internal_pos)
+#                 hcutter = int(hpos-h_internal_pos)
+                
+#                 t = cookie.narrow(1, wcutter, sidelen)
+#                 t = t.narrow(0, hcutter, sidelen)
 
+
+                # t = t[t<idx]
+                # print(t)
+                # if out is not None:
+                #     curout = out[:,t.reshape((-1,))]
+                #     # print(curout)
+                # else:
+                #     curout = None
+                curout = out
+                
+                # print(curout.size())
+                # import pdb; pdb.set_trace()
+                
+                # if image_prompts is not None and idx in prompts_idx:
+                #     if out is not None:
+                #         out = torch.cat((out, prompts[:, idx].unsqueeze(1)), dim=-1)
+                #     else:
+                #         out = prompts[:, idx].unsqueeze(1)
+                if False:
+                    pass
+                else:
+                    # if out is not None:
+                    combd = torch.cat((textprompts, curout), dim=-1)
+                    # else:
+                        # combd = textprompts
+                    # if idx>=2400:
+                    #     print(combd.size(), attention_mask.size())
+                    # try:
+                    logits, cache = dalle(combd, attention_mask, use_cache=use_cache, cache=cache, return_loss=False)
+                    # except:
+                    # import pdb; pdb.set_trace()
+                    logits = logits[:, idx+127, vocab_size:]
+                    
+                    if cfg is not None:
+                        if out is not None:
+                            combd_nocond = torch.cat((textprompts_nocond, curout), dim=-1)
+                        else:
+                            combd_nocond = textprompts_nocond
+                        logits_nocond, cache = dalle(combd_nocond, attention_mask, use_cache=use_cache,
+                                              cache=cache, return_loss=False)
+                        logits_nocond = logits_nocond[:, idx+127, vocab_size:]
+
+                        logits = torch.lerp(logits_nocond, logits, cfg)
+                    
+                    logits /= temperature
+                    filtered_logits = transformers.top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
+                    probs = torch.nn.functional.softmax(filtered_logits, dim=-1)
+                    sample = torch.multinomial(probs, 1)
+
+                    out[:,idx] = sample.squeeze(1)
+            codebooks = out
             images = vae.decode(codebooks)
             pil_images += utils.torch_tensors_to_pil_list(images)
 
