@@ -81,6 +81,7 @@ class ArbImagePrompts:
         # print(mask.reshape(-1).bool().cpu())
         # assert False,"help"
         image_prompts_idx = set(image_prompts_idx[~mask.reshape(-1).bool().cpu()])
+        self.mask = mask.reshape(-1).bool().cpu()
         # import pdb; pdb.set_trace()
         return image_prompts_idx, image_prompts
 
@@ -172,14 +173,16 @@ import random
 
 
 # image_prompts = ArbImagePrompts(Image.open("ld_inpaint (10).png"), Image.open("ld_mask_inv (7).png"), vae, w=64, h=64, device=device)
-arb_image_prompts = ArbImagePrompts(Image.open("mask32.png"), Image.open("mask32.png"), vae, w=32, h=32, device=device)
+# arb_image_prompts = ArbImagePrompts(Image.open("ld_inpaint (5).png"), Image.open("ld_mask_inv (4).png"), vae, w=32, h=32, device=device)
+arb_image_prompts = ArbImagePrompts(Image.open("ld_inpaint (5).png"), Image.open("ld_mask (6).png"), vae, w=32, h=32, device=device)
+# arb_image_prompts = ArbImagePrompts(Image.open("mask32.png"), Image.open("ld_mask_inv (7).png"), vae, w=32, h=32, device=device)
 # mask_image_prompts = MaskedImagePrompts(Image.open("ld_inpaint (10).png"), Image.open("ld_mask_inv (7).png"), vae, device=device)
 
 pil_images = []
 ppl_scores = []
 # try:
 for text, top_k, top_p, images_num, cfg in [
-    ("a landscape",2048, 0.995, 3, 4),
+    ("flowers",2048, 0.995, 3, 4),
     # ("a portrait of a cute girl, oil painting",2048, 0.995, 1, 3),
 ]:
     text = translators.google(text, from_language='en', to_language='ru')

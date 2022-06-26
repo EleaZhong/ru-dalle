@@ -129,11 +129,17 @@ def generate_images_arb(text, tokenizer, dalle, vae, top_k, top_p, images_num, i
                 assert true_side_len==32
                 
                 image_tokens = image_prompts.image_tokens
+                image_mask = image_prompts.mask
                 image_tokens = image_tokens.repeat(chunk_bs, 1)
                 out = image_tokens
                 
-                num = 0
+
                 for idxnum, idx in enumerate(tqdm(indexs)):
+                    replace_idx = torch.logical_and(idx, image_mask)
+                    if not torch.any(replace_idx):
+                        continue
+                    
+                    
                     
                     # cookie cutting
 #                     wpos = idx%true_side_len + 1
@@ -192,15 +198,14 @@ def generate_images_arb(text, tokenizer, dalle, vae, top_k, top_p, images_num, i
                     # import pdb; pdb.set_trace()
                     sample = torch.cat((sample, torch.zeros(chunk_bs, true_size-allmaxes[idxnum]).long().to(device)), dim=1)
                     
-                    out[:,idx] = sample[:,idx]
+                    out[:,replace_idx] = sample[:,replace_idx]
                     # out[:,idx] = sample[:,idx]
                     
                     if False:
                         images = vae.decode(out)
                         iml = utils.torch_tensors_to_pil_list(images)
                         for i in iml:
-                            i.save(f"tmps/img_{num}.png")
-                            num+=1
+                            i.save(f"tmps/img_{idxnum}.png")
 
             elif image_prompts is None:
                 for idx in tqdm(range(0, true_size)):
